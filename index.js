@@ -4,6 +4,7 @@ const cors = require('cors');
 require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 5000;
 
 // middleware
@@ -32,6 +33,7 @@ async function run() {
         const menuCollection = database.collection("menu");
         const reviewCollection = database.collection("reviews");
         const cartCollection = database.collection("carts");
+        const paymentCollection = database.collection("payments");
 
         //jwt related api
         app.post('/jwt', async (req, res) => {
@@ -134,9 +136,9 @@ async function run() {
             res.send(result);
         });
 
-        app.get('/menu/:id', async(req, res) =>{
+        app.get('/menu/:id', async (req, res) => {
             const id = req.params.id;
-            const query = {_id: new ObjectId(id)};
+            const query = { _id: new ObjectId(id) };
             const result = await menuCollection.findOne(query);
             res.send(result);
         });
@@ -147,10 +149,10 @@ async function run() {
             res.send(result);
         })
 
-        app.patch('/menu/:id', async(req, res) =>{
+        app.patch('/menu/:id', async (req, res) => {
             const item = req.body;
             const id = req.params.id;
-            const filter = {_id: new ObjectId(id)};
+            const filter = { _id: new ObjectId(id) };
             const updateDoc = {
                 $set: {
                     name: item.name,
@@ -192,6 +194,47 @@ async function run() {
             const query = { _id: new ObjectId(id) };
             const result = await cartCollection.deleteOne(query);
             res.send(result);
+        })
+
+        // Payment intent
+        app.post('/create-payment-intent', async (req, res) => {
+            const { price } = req.body;
+            const amount = parseInt(price * 100); //stripe calculates price in poisha, so we have to multiply by 100
+            console.log(amount, 'inside intent');
+
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: 'usd',
+                payment_method_types: ["card"]
+            })
+
+            res.send({
+                clientSecret: paymentIntent.client_secret
+            })
+        })
+
+        app.get('/payments/:email',verifyToken, async(req, res) =>{
+            const query = {email: req.params.email};
+            if(req.params.email !== req.decoded.email){
+                return res.status(403).send({message: 'forbidden access'});
+            }
+            const result = await paymentCollection.find(query).toArray();
+            res.send(result);
+        })
+
+        app.post('/payments', async(req, res) =>{
+            const payment = req.body;
+            const paymentResult = await paymentCollection.insertOne(payment);
+
+            // carefully delete each item from the cart
+            console.log('Payment info', payment);
+            const query = {_id: {
+                $in: payment.cartIds.map(id => new ObjectId(id))  //*****
+            }};
+
+            const deleteResult = await cartCollection.deleteMany(query);
+
+            res.send({paymentResult, deleteResult});
         })
 
 
